@@ -83,15 +83,6 @@ function getPortfolioValue(account) {
 }
 
 /**
- * Checks whether today is a weekday
- * @return {boolean} True if today is a weekday; False otherwise
- */
-function isWeekday() {
-  var curDay = parseInt(Utilities.formatDate(new Date(), "EST", "u"));
-  return curDay <= 5;  
-}
-
-/**
  * Updates brokerage tracking account with today's delta by fetching investments from
  * account notes, calculating current account value and adding a transaction to YNAB.
  */

@@ -1,27 +1,3 @@
-/**
- * Extracts a match at an index
- * @param match {string[]} List of matches
- * @param index {number} Index at which match should be extracted
- * @returns {string} Requested field or undefined is not found
- */
-function getValueFromMatchAtIndex(match, index) {
-  if (match && match.length > index) {
-    const rv = match[index];
-    return rv.length >= 100 ? rv.substring(0, 100) : rv;
-  }
-}
-
-/**
- * Parses amount from string to float.
- * @param amountStr {string} Amount to parse.
- * @returns {number} Parsed amount.
- * @example `parseAmount("1,234.56"); // returns 1234.56`
- */
-function parseAmount(amountStr) {
-  if (!amountStr) return undefined;
-  return parseFloat(amountStr.replace(',', ''));
-}
-
 const ynabAccountProperty = JSON.parse(getPropertyValue('ynabEmailAutomationAccounts') || '{}');
 const fireflyAccountProperty = JSON.parse(getPropertyValue('fireflyEmailAutomationAccounts') || '{}');
 
@@ -279,7 +255,6 @@ const merchantEmailsMap = {
     }
   }
 }
-const ynabBudget = getBudget(getPropertyValue('ynabBudgetName'));
 
 /**
  * Gets reference to an email label
@@ -378,7 +353,7 @@ function processEmail(email, messageFieldArr, budgetType, processingType = "Cred
  */
 function processYnab({ ynab: { account }, amount, merchant, notes, category, cleared = 'uncleared'}) {
   const transaction = {
-    budgetId: ynabBudget.id,
+    budgetId: getBudget(getPropertyValue('ynabBudgetName')).id,
     accountId: account,
     amount,
     payeeName: merchant,
