@@ -58,7 +58,7 @@ const accountsMap = {
       const account = getValueFromMatchAtIndex(accountMatch, 2);
       let merchant = getValueFromMatchAtIndex(merchantMatch, 2);
       let amount = parseAmount(getValueFromMatchAtIndex(amountMatch, 2));
-      if (body.indexOf('You made') >= 0 && body.indexOf('transaction') >= 0) {
+      if ((body.indexOf('You made') >= 0 && body.indexOf('transaction') >= 0) || body.indexOf('Order Confirmation') >= 0) {
         amount *= -1;
       }
 
@@ -76,7 +76,7 @@ const accountsMap = {
               firefly: fireflyAccountProperty.chase_amazon
             }
           : undefined;
-      return { ...budgets, merchant, amount };
+      return [{ ...budgets, merchant, amount }];
     }
   },
   citi: {
@@ -93,7 +93,7 @@ const accountsMap = {
       const ynab = ynabAccountProperty.citi;
       const firefly = fireflyAccountProperty.citi;
 
-      return { ynab, firefly, merchant, amount }
+      return [{ ynab, firefly, merchant, amount }];
     }
   },
   wellsfargo: {
@@ -103,18 +103,28 @@ const accountsMap = {
         return undefined;
       }
 
-      const merchantAmountMatch = body.match(/Withdrawals(.|\s)+?>\b((.|\s)+?)<(.|\s)*?\$([\d\,\.]*)</m);
-      Logger.log(`matches are: ${merchantAmountMatch}`);
-      let amount = 0; // TODO add regex for deposits
-      if (body.indexOf('Withdrawals') >= 0) {
-        amount = -1 * parseAmount(getValueFromMatchAtIndex(merchantAmountMatch, 5));
-      } else {
-        amount = parseAmount(getValueFromMatchAtIndex(merchantAmountMatch, 5));
+      const getTransactions = (tableData, multiplier) => {
+        if (!tableData || tableData.length == 0) {
+          return [];
+        }
+
+        return tableData[0]
+          .split('<tr')
+          .map(transaction => transaction.match(/<.+?>\b(.+)<\B.*\$([\d\.\,]+)/))
+          .filter(transaction => transaction)
+          .map(match => ({
+            ynab: ynabAccountProperty.wellsfargo,
+            firefly: fireflyAccountProperty.wellsfargo,
+            merchant: getValueFromMatchAtIndex(match, 1),
+            amount: multiplier * parseAmount(getValueFromMatchAtIndex(match, 2))
+          }));
       }
-      const merchant = getValueFromMatchAtIndex(merchantAmountMatch, 2);
-      const ynab = ynabAccountProperty.wellsfargo;
-      const firefly = fireflyAccountProperty.wellsfargo;
-      return { ynab, firefly, merchant, amount };
+
+      const withdrawals = body.match(/<table.+Withdrawals.*<\/table>/sm)
+      const deposits = body.match(/<table.+Deposits.*<\/table>/sm)
+      const transactions = [...getTransactions(withdrawals, -1), ...getTransactions(deposits, 1)]
+
+      return transactions.length > 0 && transactions || undefined;
     }
   },
   discover: {
@@ -126,8 +136,106 @@ const accountsMap = {
       const amount = parseAmount(getValueFromMatchAtIndex(amountMatch, 1));
       const ynab = ynabAccountProperty.discover;
       const firefly = fireflyAccountProperty.discover;
+      // TODO: Update for refunds
+      const multiplier = -1;
 
-      return { ynab, firefly, merchant, amount };
+      amount *= multiplier;
+
+      return [{ ynab, firefly, merchant, amount }];
+    }
+  },
+  venmo: {
+    match: from => from.indexOf('venmo@venmo.com') >= 0,
+    fields: body => {
+      const matches = body.match(/You.+<a.+?user_id.+?>\B(.+?)<.+?<p>(.+?)<\/.+?(\+|-\s*\$[\d\.\,]*).+?Completed via.+?(bank|Venmo).*?/ms);
+      if (!matches || matches.length < 4) {
+        return undefined;
+      }
+      const name = getValueFromMatchAtIndex(matches, 1);
+      const notes = getValueFromMatchAtIndex(matches, 2);
+      const amountStr = getValueFromMatchAtIndex(matches, 3);
+      const multiplier = amountStr.indexOf('+') >= 0 ? 1 : -1;
+      const amount = parseAmount(amountStr.split('$')[1]);
+      const source = getValueFromMatchAtIndex(matches, 4);
+
+      return [{
+        ynab: source === 'Venmo' ? ynabAccountProperty.venmo : ynabAccountProperty.usbank,
+        firefly: source === 'Venmo' ? fireflyAccountProperty.venmo : fireflyAccountProperty.usbank,
+        merchant: name && name.trim(),
+        amount: multiplier * amount,
+        notes,
+        cleared: source === 'Venmo' ? 'cleared' : 'uncleared'
+      }]
+    }
+  },
+  forex: {
+    match: from => from.indexOf('metatrader@forex.com') >= 0,
+    fields: body => {
+      const tableMatch = body.matchAll(/Deals:.+?<\/tr>\s*(<tr.+?(?:<tr.+?Positions))/gsm);
+      if (!tableMatch) {
+        Logger.log("Could not find table with deal info");
+        return undefined;
+      }
+      const table = Array.from(tableMatch).map(match => match[1]);
+      if (table.length == 0) {
+        Logger.log("Could not parse deals table");
+        return undefined;
+      }
+      const rowsMatch = table[0].matchAll(/(<tr.+?<td.+?\<\/td>\s*<\/tr>)*/gsm);
+      if (!rowsMatch) {
+        Logger.log('Could not find rows in Deals table');
+        return undefined;
+      }
+      const rows = Array.from(rowsMatch).map(row => row[1]).filter(row => row);
+      const transactions = rows.map(row => Array.from(row.matchAll(/<td.*?>(.*?)<\/td>\s*/gsm)))
+        .filter(cellMatch => cellMatch.length == 14)
+        .map(cellMatch =>({
+          time      : cellMatch[0][1],
+          ticket    : parseInt(cellMatch[1][1]),
+          type      : cellMatch[2][1],
+          size      : parseFloat(cellMatch[3][1]),
+          item      : cellMatch[4][1],
+          price     : parseFloat(cellMatch[5][1]),
+          order     : parseInt(cellMatch[6][1]),
+          comment   : cellMatch[7][1] && XmlService.parse(`<d>${cellMatch[7][1]}</d>`).getRootElement().getText() || '',
+          entry     : cellMatch[8][1],
+          cost      : parseFloat(cellMatch[9][1]),
+          commission: parseFloat(cellMatch[10][1]),
+          fee       : parseFloat(cellMatch[11][1]),
+          swap      : parseFloat(cellMatch[12][1]),
+          profit    : parseFloat(cellMatch[13][1])
+        }))
+        // skip first element as it is a header
+        .slice(1)
+        .reduce((res, cur) => {
+          const item = res.find(i => i.item == cur.item && i.size == cur.size && i.type !== cur.type && i.entry !== cur.entry && i.comment == cur.comment)
+          if (!item) return [...res, cur];
+          item.entry = item.entry !== cur.entry && "out" || item.entry;
+          item.profit += cur.profit;
+          item.commission += cur.commission;
+          item.swap += cur.swap;
+          item.fee += cur.fee;
+          item.cost += cur.cost;
+          item.type = cur.entry == "out" ? item.type : cur.type;
+          item.ticket = cur.entry == "out" ? item.ticket : cur.ticket;
+          return res;
+        }, [])
+        .filter(res => res.entry == "out" || res.type == "balance");
+        // TODO: merge 'in' and 'out' and report back the 'order' number from the 'in' transaction
+        return transactions.map(transaction => {          
+          const comment = transaction.comment && `comment: ${transaction.comment}` || '';
+          // since this is "out", the type is reversed
+          const tType = transaction.type == "sell" ? "buy" : "sell";
+          const notes = `${tType} ${transaction.size} at ${transaction.price}; ${comment} (ticket: ${transaction.order})`;
+          return {
+            ynab: ynabAccountProperty.forex,
+            firefly: fireflyAccountProperty.forex,
+            amount: transaction.profit,
+            merchant: "ForEx.com",
+            notes: transaction.type == "balance" ? transaction.comment : notes,
+            cleared: 'cleared'
+          }
+        });
     }
   }
 }
@@ -136,19 +244,38 @@ const accountsMap = {
  * Map of merchants to process
  */
 const merchantEmailsMap = {
-  amazon: {
+  amazon_orders: {
     match: (from) => from.indexOf('auto-confirm@amazon.com') >= 0,
     fields: (body) => {
-      const test = body.match(/Order Total:.+?\$([\d\.]*)/s);
-      const orderNumber = getValueFromMatchAtIndex(body.match(/Order <a href.+?>\#(.*?)</s), 1);
-      const amount = -1 * parseAmount(getValueFromMatchAtIndex(body.match(/Order Total:.+?\$([\d\.]*)/s), 1));
+      const matches = body.matchAll(/<a.+?orderId.+?>\s*(.*?)<.+?Order Total.+?\$([\d\.\,]*)/gsm)
+      if (!matches) {
+        return undefined;
+      }
+
+      return Array.from(matches).map( match => ({
+        merchant: 'Amazon',
+        notes: `${match[1]} #toProcess`,
+        category: null,
+        amount: parseAmount(match[2]) * -1,
+        ynab: parseAmount(match[2]) == 0 ? ynabAccountProperty.amazon_gc : ynabAccountProperty.chase_amazon,
+        firefly: parseAmount(match[2]) == 0 ? fireflyAccountProperty.amazon_gc : fireflyAccountProperty.chase_amazon
+      }));
+    }
+  },
+  amazon_refunds: {
+    match: (from) => from.indexOf('return@amazon.com') >= 0,
+    fields: (body) => {
+      const amount = parseAmount(getValueFromMatchAtIndex(body.match(/Refund total:.*?\$([\d\.\,]*)/s), 1));
+      const orderId = getValueFromMatchAtIndex(body.match(/orderID%3D([\d-]*)/s), 1);
       return {
         merchant: 'Amazon',
-        notes: orderNumber,
+        notes: orderId,
         category: null,
         amount,
-        ynab: ynabAccountProperty.chase_amazon
-      };
+        ynab: body.indexOf('Refund will appear on your Visa') >= 0 ? ynabAccountProperty.chase_amazon : ynabAccountProperty.amazon_gc,
+        firefly: body.indexOf('Refund will appear on your Visa') >= 0 ? fireflyAccountProperty.chase_amazon : fireflyAccountProperty.amazon_gc,
+        cleared: body.indexOf('Refund is available now in your Amazon Account') >= 0 ? 'cleared' : 'uncleared'
+      }
     }
   }
 }
@@ -190,8 +317,8 @@ function budgetAutomation() {
 
   pendingThreads.forEach(({email, type, labelToRemove}) => {
     const messageFieldArr = email.getMessages()
-      .map(extractFieldsFromMessage)
-      .filter(f => f.amount);
+      .flatMap(extractFieldsFromMessage)
+      .filter(f => f.amount !== null || f.amount !== undefined);
 
     // process all providers
     const result = Object.keys(budgetTypes)
@@ -213,6 +340,10 @@ function budgetAutomation() {
  * @returns {boolean}
  */
 function processEmail(email, messageFieldArr, budgetType, processingType = "CreditCard") {
+  if (messageFieldArr.length === 0) {
+    Logger.log('No transactions to process. Skipping.');
+    return true;
+  }
   const { enabled, ordersLabelToAdd, transactionLabelToAdd, functToRun, name } = budgetType;
   if (!enabled) {
     Logger.log(`${name} processing is disabled. Skipping.`);
@@ -245,7 +376,7 @@ function processEmail(email, messageFieldArr, budgetType, processingType = "Cred
  * 
  * @returns {boolean}
  */
-function processYnab({ ynab: { account }, amount, merchant, notes, category }) {
+function processYnab({ ynab: { account }, amount, merchant, notes, category, cleared = 'uncleared'}) {
   const transaction = {
     budgetId: ynabBudget.id,
     accountId: account,
@@ -253,7 +384,8 @@ function processYnab({ ynab: { account }, amount, merchant, notes, category }) {
     payeeName: merchant,
     approved: false,
     memo: notes || undefined,
-    category
+    category,
+    cleared
   };
 
   Logger.log(`About to submit YNAB transaction for '${merchant}' in the amount of '${amount}'`);
