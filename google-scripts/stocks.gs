@@ -1,118 +1,134 @@
-var YAHOO_FINANCE_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/$SYMBOL?modules=price";
-
 /**
- * Fetches stock price for a single ticker
- * @param symbol {string} - ticker to fetch the price for
- * @returns {object} a JSON object containing stock price or error info
+ * @typedef {BudgetAutomation.StockProvider}
+ * @property {string} endpoint Endpoint to call
+ * @property {string} apiKey API key to use to make a request
+ * @property {Object} fetchOptions Base options to use when making a request
+ * @property {function(string)} getStockPrice Gets a value of a ticker
  */
-function fetchStockPrice(symbol) {
-  if (symbol === 'CASH') {
-    return { price: 1 }
-  }
+const financeProviders = {
+  alphavantage: {
+    endpoint: 'https://www.alphavantage.co',
+    apiKey: getPropertyValue('alphavantage_apikey'),
+    fetchOptions: {
+      method: 'GET',
+      muteHttpExceptions: true
+    },
+    getStockPrice: symbol => {
+      const endpoint = `${financeProviders.alphavantage.endpoint}/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${financeProviders.alphavantage.apiKey}`;
+      try {
+        const result = JSON.parse(UrlFetchApp.fetch(endpoint, financeProviders.alphavantage.fetchOptions));
+        if (result.Note) {
+          throw new Error(result.Note);
+        }
+        const priceKeyName = Object.keys(response['Global Quote']).find(key => key.match(/\. price$/));
+        if (!priceKeyName) {
+          return {
+            message: `Could not determine price for '${symbol}'`,
+            error: 'Price not found'
+          };
+        }
 
-  var url = YAHOO_FINANCE_URL.replace("$SYMBOL", symbol);
-  try {
-    const response = UrlFetchApp.fetch(url, {corsDomain: 'finance.yahoo.com', muteHttpExceptions: true});
-    var stock = JSON.parse(response);
-  }
-  catch (err) {
-    console.error("Failed to fetch stock price for " + symbol + " due to " + stock.quoteSummary.error);
-    return {
-      error: err,
-      message: "Failed to fetch stock price"
-    };
-  }
-  
-  if (stock.quoteSummary.error) {
-    console.error("Failed to fetch stock price for " + symbol + " due to " + stock.quoteSummary.error);
-    return { 
-      message: "Failed to fetch stock price",
-      error: stock.quoteSummary.error
-    };
-  }
-  else {
-    return {
-      price: stock.quoteSummary.result[0].price.regularMarketPrice.raw
-    };
-  }
-}
-
-/**
- * Fetches properties that are needed to talk to YNAB
- * @returns {object} JSON object containing 'accountName' and 'budgetName' to work with
- */
-function setupStocksVars() {
-  return {
-    accountName: userProperties.getProperty('ynabStocksAccountName'),
-    budgetName: userProperties.getProperty('ynabStocksBudgetName')
-  };
-}
-
-/**
- * Gets current portfolio value from notes on the account.
- * Account must have notes section defined as: 'INVESTMENTS: TICKER1 SHARE COUNT, TICKER2 SHARE COUNT'
- * If you hold cash in your brokereage account, use 'CASH' as ticker name
- * @param account {object} YNAB account that corresponds to the investments tracking
- * @returns {number} Portfolio value
- */
-function getPortfolioValue(account) {
-  var notes = account.note;
-  if (notes.indexOf('INVESTMENTS:') == -1) {
-    console.warn("Could not find 'INVESTMENTS:' in account " + account.name);
-    return;
-  }
-  
-  var investmentsStr = notes.replace(/INVESTMENTS:\s*/, '');
-  var investments = investmentsStr.split(/,\s*/);
-  return investments.map(curInvestment => {
-    const [ticker, amount] = curInvestment.split(' ');
-    if (!ticker || !amount) { 
-      console.warn(`Either stock symbol or amount is missing. symbol=${ticker} amount=${amount}`);
-      return 0;
+        return { price: response['Global Quote'][priceKeyName] };
+      }
+      catch (error) {
+        Logger.log(`Failed to fetch stock price for '${symbol}' due to '${error}`);
+        return 0;
+      }
     }
-    const value = fetchStockPrice(ticker);
-    if (value.error) {
-      console.error(`There was an error while fetching stock price for: ${ticker}`);
-      return 0;
+  },
+  yahoo: {
+    endpoint: 'https://query2.finance.yahoo.com/v8/finance/chart',
+    getStockPrice: symbol => {
+      const endpoint = `${financeProviders.yahoo.endpoint}/${symbol}`;
+      const results = JSON.parse(UrlFetchApp.fetch(endpoint));
+      return results.chart.result[0].meta.chartPreviousClose;
     }
-    return value.price * amount.replace(',');
-  })
-  .reduce((acc, curVal) => acc + curVal);
-
-//  return Math.round(total * 100) / 100;
-}
-
-/**
- * Updates brokerage tracking account with today's delta by fetching investments from
- * account notes, calculating current account value and adding a transaction to YNAB.
- */
-function updateStocksAccount() {
-  if (!isWeekday) {
-    // today is not a week day
-    console.warn("Skipping execution due to today being not a weekday");
-    return;
   }
-  var config = setupStocksVars();
-  var budget = getBudget(config.budgetName);
-  var account = getAccount(budget, config.accountName);
-  var curPortfolioValue = getPortfolioValue(account);
-  var curAccountValue = getAccountValue(account);
-  
-  var amount = curPortfolioValue - curAccountValue;
-  if (Math.abs(amount) >= 1) {
-    console.log(`About to add a transaction for $${amount}`);
-    const transaction = {
-      budgetId: budget.id,
-      accountId: account.id,
-      amount: amount,
-      payeeName: "Daily Account Balance Update",
-      approved: true,
-      cleared: 'cleared'
-    };
-    enterTransaction(transaction);
-  }
-  else {
-    console.log(`Amount is '$${amount}'. No need to enter a new transaction.`);
-  }
-}
+};
 
+const stocksProcessor = {
+  provider: financeProviders.yahoo,
+
+  stocksValues: {
+    CASH: 1
+  },
+
+  /**
+   * Fetch stock prices for a ticker
+   * @param {string} symbol Symbol to fetch price for
+   * @return {!BudgetAutomation.StockResponse} JSON object containing stock price or error info
+   */
+  fetchStockPrice: symbol => {
+    symbol = symbol.toUpperCase();
+    if (stocksProcessor.stocksValues[symbol]) {
+      return stocksProcessor.stocksValues[symbol];
+    }
+
+    const ticker = symbol.endsWith(':') ? symbol.substring(0, symbol.length - 1) : symbol;
+    const value = stocksProcessor.provider.getStockPrice(ticker);
+    stocksProcessor.stocksValues[symbol] = value;
+
+    return value;
+  },
+
+  /**
+   * @private
+   * Gets value of portfolio based on notes on the account.
+   * Account must have a note with content define as: 'INVESTMENTS: ticker1 shareCount, ticker2 shareCount'
+   * Or 'INVESTMENTS: ticker1: shareCount, ticker2: shareCount
+   * @param {BudgetAutomation.Provider} provider Provider configuration
+   * @param {string} accountName Name of the account to look at the notes for
+   * @return {number} Portfolio value
+   */
+  getPortfolioValue: (provider, accountName) => {
+    const accName = provider.account(accountName).name;
+    const account = provider.api.getAccount(accName);
+    let securities = {};
+    if (account.note && account.note.indexOf('INVESTMENTS') >= 0) {
+      Logger.log(`Found notes with content: ${account.note}`);
+      account.note
+        .replace(/INVESTMENTS:\s*/, '')
+        .split(/,\s*/)
+        .forEach(holding => {
+          const [ticker, amount] = holding.replace(':', ' ').split(/\s+/);
+          if (!ticker || !amount) { 
+            console.warn(`Either stock symbol or amount is missing. symbol=${ticker} amount=${amount}`);
+          }
+          else {
+            if(!Object.keys(securities).includes(ticker)) {
+              securities[ticker] = 0;
+            }
+            securities[ticker] += parseFloat(amount.replace(',', ''));
+          }
+        });
+    } else {
+      provider.api.getTransactions({ accountId: account.id })
+        .filter(transaction => {
+          const match = transaction.notes
+            ? transaction.notes.match(/(Buy|Sell)\s+(\w*)[\s:](.*)/i)
+            : false;
+          if (match) {
+            const [fullMatch, action, ticker, amount] = transaction.notes.match(/(Buy|Sell)\s+(\w*)[\s:](.*)/i);
+            if (!Object.keys(securities).includes(ticker)) {
+              securities[ticker] = 0;
+            }
+            if (action.toUpperCase() === 'BUY') {
+              securities[ticker] += parseFloat(amount.replace(',', ''));
+            } else if (action.toUpperCase() === 'SELL') {
+              securities[ticker] -= parseAmount(amount.replace(',', ''));
+            } else {
+              Logger.log(`Unknown action '${action}`);
+            }
+          }
+        })
+    }
+
+    return Object.keys(securities)
+      .reduce((res, cur) => {
+        const amount = securities[cur];
+        const results = stocksProcessor.fetchStockPrice(cur);
+
+        return res + results * amount;
+      }, 0);
+  }
+};

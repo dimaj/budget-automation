@@ -31,6 +31,17 @@ function getDateString(dateMath, timeZone, dateFormat) {
   
   return Utilities.formatDate(date, timeZone, dateFormat);
 }
+// // get yesterday in YYYY-MM-dd
+// function isWeekday() {
+//   console.log("starting");
+//   var date = new Date();
+//   console.log("Date is:", date);
+//   date.setDate(date.getDate() - 1);
+//   console.log("new date is:", date);
+//   var curDay = parseInt(Utilities.formatDate(new Date(), "PST", "YYYY-MM-dd"));
+//   var fmt = Utilities.formatDate(date, "PST", "YYYY-MM-dd");
+//   return curDay <= 5;  
+// }
 
 /**
  * Checks whether today is a weekday
@@ -40,6 +51,7 @@ function isWeekday() {
   var curDay = parseInt(Utilities.formatDate(new Date(), "EST", "u"));
   return curDay <= 5;  
 }
+
 
 /**
  * Extracts a match at an index
@@ -63,4 +75,14 @@ function getValueFromMatchAtIndex(match, index) {
 function parseAmount(amountStr) {
   if (!amountStr) return undefined;
   return parseFloat(amountStr.replace(',', ''));
+}
+
+/**
+ * Checks if object is 'null' or 'undefined'
+ * @param value {any} Value to check if it is null or undefined
+ * @returns {boolean} True if object is null or undefined
+ * @example `IsNullOrUndefined(null); // returns true
+ */
+function IsNullOrUndefined(value) {
+  return value === undefined || value === null;
 }
