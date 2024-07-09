@@ -26,6 +26,16 @@ For firefly, these properties are needed:
 | firefly-pat | Access token to make API requests against your instance of FireFly |
 | fireflyEmailAutomationAccounts | A JSON object that defines your account information. |
 
+## ActualBudget
+By default, [ActualBudget](actualbudget.org) does not have RESTful API. In order to make it work, you'll need to deploy [actual-http-api](https://github.com/jhonderson/actual-http-api). Once actual-http-api service has been deployed, the following properties are needed:
+| Property Name | Description |
+|---------------|-------------|
+| actualApiEndpoint | URL for your instance of ActualBudget HTTP Server |
+| actualApiKey | API token for HTTP Server |
+| actualBudgetId | Budget Sync ID for budget file |
+| actualEmailAutomationAccounts | A JSON object that defines account infomration. |
+
+
 ## *EmailAutomationAccounts property definitions
 These properties are used to define a map of Account Name to Account ID as they are defined in a budget app of your choosing.
 ### YNAB
@@ -41,8 +51,15 @@ UUID of your account can be found in the url after clicking on the account name 
 ### FireFly
 ```
 {
-    "citi": { "account": "Account index", "name": "Main Checking" },
-    "discover": { "account": "Account index", "name": "Main CreditCard" }
+    "citi": { "account": "account_uuid", "name": "Main Checking" },
+    "discover": { "account": "account_uuid", "name": "Main CreditCard" }
 }
 ```
 
+### Actual
+```
+{
+    "citi": { "account": "account_uuid", "name": "Main Checking" },
+    "discover": { "account": "account_uuid", "name": "Main CreditCard" }
+}
+```
