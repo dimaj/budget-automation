@@ -149,3 +149,36 @@ function updateAmazonTransactionComments() {
       });
   }
   
+/**
+ * Updates account with current stock account value
+ */
+function updateStocks() {
+    const providers = Object.keys(budgetProviders)
+      .filter(provider => budgetProviders[provider].enabled)
+      .map(provider => budgetProviders[provider]);
+  
+    providers.forEach(provider => {
+      const account = provider.account('investments');
+      const value = stocksProcessor.getPortfolioValue(provider, 'investments');
+      // Logger.log(JSON.stringify(securities));
+      const curValue = provider.api.getAccountValue(account.name);
+      const diff = Math.round((value - curValue) * 100) / 100;
+      Logger.log(`total: ${value}`);
+  
+      if (Math.abs(diff) >= 1) {
+        console.log(`About to add a transaction for $${diff}`);
+        const transaction = {
+          [provider.name]: account,
+          amount: diff,
+          merchant: 'Fidelity',
+          notes: "Daily Account Balance Update",
+          cleared: true
+        };
+        provider.api.processTransaction(transaction);
+  
+      } else {
+        console.log(`Amount is '$${diff}'. No need to enter a new transaction.`);
+      }
+    });
+  }
+  
