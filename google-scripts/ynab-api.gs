@@ -7,6 +7,8 @@ const ynabProcessor = {
     },
     method: 'GET'
   },
+
+  budgetName: getPropertyValue('ynabBudgetName'),
   budgetIds: {},
 
   getBudget: budgetName => {
@@ -17,6 +19,10 @@ const ynabProcessor = {
   },
 
   getBudgetId: budgetName => {
+    if (!budgetName) {
+      budgetName = ynabProcessor.budgetName;
+    }
+
     if (ynabProcessor.budgetIds[budgetName]) {
       return ynabProcessor.budgetIds[budgetName];
     }
@@ -28,7 +34,7 @@ const ynabProcessor = {
   },
 
   getAccount: accountName => {
-    const budgetId = ynabProcessor.getBudgetId(getPropertyValue('ynabBudgetName'));
+    const budgetId = ynabProcessor.getBudgetId();
     const url = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/accounts`;
     return JSON.parse(UrlFetchApp.fetch(url, ynabProcessor.fetchOptions))
       .data
@@ -58,7 +64,7 @@ const ynabProcessor = {
    * @returns {!Array<BudgetAutomation.YNABTransaction>}
    */
   getTransactions: ({ accountId, categoryId, since }) => {
-    const budgetId = ynabProcessor.getBudgetId(getPropertyValue('ynabBudgetName'));
+    const budgetId = ynabProcessor.getBudgetId();
     const sinceDate = IsNullOrUndefined(since) ? '' : `?since_date=${since}`;
     const account = IsNullOrUndefined(accountId) ? '' : `accounts/${accountId}/`
     const category = IsNullOrUndefined(categoryId) && account === '' ? '' : `categories/${categoryId}/`;
@@ -78,11 +84,11 @@ const ynabProcessor = {
 
   /**
    * Updates transactions
-   * @param {string} budgetName
    * @param {!Array<BudgetAutomation.YNABTransaction}
+   * @param {string} budgetName
    * @returns {UrlFetchApp.HTTPResponse}
    */
-  updateTransactions: (transactions, budgetName = getPropertyValue('ynabBudgetName')) => {
+  updateTransactions: (transactions, budgetName) => {
     if (IsNullOrUndefined(transactions) || transactions.length === 0) {
       Logger.log('There are no transactions to update.');
       return true;
@@ -168,5 +174,99 @@ const ynabProcessor = {
       ...transaction,
       memo: transaction.memo.replace(amazonTransactionId[0], `[${amazonTransactionId[0]}](${amazonOrderBaseUrl}${amazonTransactionId[0]})`)
     };
+  },
+
+  updateCategoryBalance: ({ budgetId, categoryId, budgeted, month }) => {
+    const payload = { category: { budgeted } };
+    const options = {
+      ...ynabProcessor.fetchOptions,
+      method: 'PATCH',
+      payload: JSON.stringify(payload)
+    };
+    const monthInMillis = month && 30 * 24 * 3600 * 1000 || 0;
+    const date = monthInMillis && getDateString(monthInMillis, 'UTC', 'YYYY-MM-dd') || getDateString(0, 'UTC', 'YYYY-MM-dd');
+    const endpoint = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/months/${date}/categories/${categoryId}`
+    return UrlFetchApp.fetch(endpoint, options);
+  },
+
+  getMonths: (date = 'current') => {
+    const budgetId = ynabProcessor.getBudgetId();
+    const url = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/months/${date}`;
+
+    const options = {
+      ...ynabProcessor.fetchOptions,
+      method: 'GET'
+    };
+
+    return JSON.parse(UrlFetchApp.fetch(url, options));
+  },
+
+  cleanup: budgetName => {
+    const budgetId = ynabProcessor.getBudgetId(budgetName);
+    // get all categories that are not hidden
+    const categories = JSON.parse(ynabProcessor.getCategories(budgetId).getContentText())
+      .data.category_groups
+      .reduce((cats, cur) => [...cats, ...cur.categories.filter(cat => !cat.hidden)], []);
+    // find categories that have notes with '#cleanup' defined
+    const catsToClean = categories.filter(cat => cat.note && cat.note.toLowerCase().indexOf('#cleanup') >= 0);
+    
+    catsToClean.forEach(({balance: amount, id: categoryId, note, name}) => {
+      if (amount <= 0) return;
+
+      if(match = note.match(/#cleanup "?(.+?)"?$/)) {
+        Logger.log(match);
+        const {id: destinationId } = categories.find(cat => cat.name === match[1]);
+        Logger.log(`Moving $${amount / 1000} from '${name}' to '${match[1]}'`);
+        ynabProcessor.updateCategoryBalance({
+          budgetId,
+          categoryId: destinationId,
+          budgeted: amount
+        });
+      } else {
+        Logger.log(`Moving $${amount / 1000} from '${name}' to 'Ready to assign'`);
+      }
+      ynabProcessor.updateCategoryBalance({
+        budgetId,
+        categoryId,
+        budgeted: amount * -1
+      });
+    });
+  },
+
+  automaticSavingsPlan: () => {
+    const budgetId = ynabProcessor.getBudgetId();
+    // get all categories that are not hidden
+    const categories = JSON.parse(ynabProcessor.getCategories(budgetId).getContentText())
+      .data.category_groups
+      .reduce((cats, cur) => [...cats, ...cur.categories.filter(cat => !cat.hidden)], []);
+    // find categories that have notes with '#asp' defined
+    const savingsTarget = categories.filter(cat => cat.note && cat.note.toLowerCase().indexOf('#asp') >= 0);
+    
+    // exit out if no category is ussed for AutomaticSavingsPlan
+    if (savingsTarget.length == 0) return;
+
+    const date = getDateString(0, 'PST', 'YYYY-MM-dd');
+    const currentMonth = ynabProcessor.getMonths();
+    const readyToAssign = currentMonth.data.month.to_be_budgeted;
+    
+    const transactions = ynabProcessor.getTransactions({since: date});
+    savingsTarget.forEach(({id, note, name}) => {
+      const match = Array.from(note.matchAll(/#asp\s*:? (\d+)% "?([^"]+)"?/ig));
+      const amountToSave = match.reduce((res, [full, percentage, payee]) => {
+        const amount = transactions
+          .filter(transaction => transaction.payee_name === payee && transaction.matched_transaction_id)
+          .reduce((res, transaction) => res + transaction.amount, 0);
+        const amountToSave = amount * percentage / 100;
+        return res + amountToSave;
+      }, 0);
+      
+      if (readyToAssign <= amountToSave) {
+        Logger.log('Not enough funds for AutomaticSavingsPlan');
+        return;
+      }
+      Logger.log(`Adding ${amountToSave / 1000} to '${name}'`)
+      const payload = {budgetId, categoryId: id, budgeted: Math.round(amountToSave)};
+      ynabProcessor.updateCategoryBalance(payload);
+    });
   }
 };

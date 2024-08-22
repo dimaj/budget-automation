@@ -28,8 +28,6 @@ function getProviderConfigs(accountName) {
 const accountsMap = {
   chase: {
     match: (from, body) => {
-      // from.indexOf('chase') >= 0;
-
       if (from.indexOf('chase') === -1) { return false }
       if (IsNullOrUndefined(body)) { return true }
 
@@ -51,8 +49,7 @@ const accountsMap = {
       if (merchant && merchant.indexOf('AMZN') >= 0) {
         merchant = 'Amazon';
       }
-      const budgetAccountName = (account && account.indexOf('4303') >= 0) ? 'chase_freedom' : 'chase_amazon';
-      const providers = getProviderConfigs(budgetAccountName);
+      const providers = getProviderConfigs('chase_freedom');
       return [{ ...providers, merchant, amount }];
     }
   },
@@ -79,9 +76,7 @@ const accountsMap = {
       if (merchant && merchant.indexOf('AMZN') >= 0) {
         merchant = 'Amazon';
       }
-
-      const budgetAccountName = (account && account.indexOf('4303') >= 0) ? 'chase_freedom' : 'chase_amazon';
-      const providers = getProviderConfigs(budgetAccountName);
+      const providers = getProviderConfigs('chase_amazon');
       return [{ ...providers, merchant, amount }];
     }
   },
@@ -246,23 +241,34 @@ const accountsMap = {
   paypal: {
     match: (from) => from.indexOf('paypal') >= 0,
     fields: body => {
-      const amountMerchant = body.match(/You (paid|sent) \$([\d\.]+).*to (.+?)</)
-      const multiplier = -1;
-      const amount = parseAmount(getValueFromMatchAtIndex(amountMerchant, 2));
-      const merchant = getValueFromMatchAtIndex(amountMerchant, 3);
+      const params = [];
+      if (payment = body.match(/You (paid|sent) \$([\d\.]+).*to (.+?)</)) {
+        const accountMatch = body
+          .split(/Paid.*?with/i)[1]
+          .split(/(?=<td.+<\/td>)/g)
+          .find(row => row.match(/<td.*<\/td>/))
+          .match(/<td(.+?)<\//)
+        const account = getValueFromMatchAtIndex(accountMatch, 1)
+          .split('>')
+          .slice(-1)
+          .pop();
+        const accountName = account.toLowerCase().indexOf('paypal') >= 0 ? 'paypal' : 'usbank';
+        params.push(
+          -1,
+          parseAmount(getValueFromMatchAtIndex(payment, 2)),
+          getValueFromMatchAtIndex(payment, 3),
+          accountName
+        );
+      } else if (deposit = body.match(/<span>(.+?) sent you \$([\d\.]*).+?</)) {
+        params.push(
+          1,
+          parseAmount(getValueFromMatchAtIndex(deposit, 2)),
+          getValueFromMatchAtIndex(deposit, 1),
+          'paypal'
+        );
+      }
+      const [ multiplier, amount, merchant, accountName ] = params;
 
-      const accountMatch = body
-        .split(/Paid.*?with/i)[1]
-        .split(/(?=<td.+<\/td>)/g)
-        .find(row => row.match(/<td.*<\/td>/))
-        .match(/<td(.+?)<\//)
-      const account = getValueFromMatchAtIndex(accountMatch, 1)
-        .split('>')
-        .slice(-1)
-        .pop();
-
-
-      const accountName = account.toLowerCase().indexOf('paypal') >= 0 ? 'paypal' : 'usbank';
       const providers = getProviderConfigs(accountName);
       return [{...providers, merchant, amount: amount * multiplier }]
     }
@@ -287,12 +293,12 @@ const merchantEmailsMap = {
 
         return {
           merchant: 'Amazon',
-          notes: `[${match[1]}](https://www.amazon.com/gp/your-account/order-details?ie=UTF8&orderID=${match[1]}) #toProcess`,
+          notes: `#to-process [${match[1]}](https://www.amazon.com/gp/your-account/order-details?ie=UTF8&orderID=${match[1]})`,
           category: null,
           amount: parseAmount(match[2]) * -1,
           ...providers,
           // since gift cards are being charged immediately, clear the transaction
-          cleared: 'cleared'
+          cleared: accountName === 'amazon_gc' ? 'cleared' : undefined
         }
       });
     }
@@ -306,10 +312,11 @@ const merchantEmailsMap = {
       const providers = getProviderConfigs(accountName);
       return {
         merchant: 'Amazon',
-        notes: `[${orderId}](https://www.amazon.com/gp/your-account/order-details?ie=UTF8&orderID=${orderId}) #toProcess`,
+        notes: `#to-process [${orderId}](https://www.amazon.com/gp/your-account/order-details?ie=UTF8&orderID=${orderId})`,
         // notes: orderId,
         category: null,
         amount,
+        ...providers,
         cleared: body.indexOf('Refund is available now in your Amazon Account') >= 0 ? 'cleared' : 'uncleared'
       }
     }
@@ -329,132 +336,6 @@ function getLabelOrCreate(labelName, shouldCreate) {
   }
 
   return rv;
-}
-
-/**
- * Adds proper labels to emails that have been automatically
- * categorized and therefore not labled by gmail automation
- * @return {void}
- */
-function emailLabler() {
-  const labelerConfig = {
-    transactions: {
-      emailList: [
-        'no.reply.alerts@chase.com',
-        'alerts@info6.citi.com',
-        'alerts@notify.wellsfargo.com',
-        'discover@services.discover.com'
-      ].join(' OR '),
-      labelToAdd: globalLabels.pending,
-      searchString: `Merchant -{"You've reached your pre-set balance"}`
-    },
-    orders: {
-      emailList: [
-        'auto-confirm@amazon.com'
-      ].join(' OR '),
-      labelToAdd: globalLabels.ordersPending,
-      searchString: `subject:("Your Amazon.com order" OR "Your refund") ("Order Confirmation" OR "Refund Confirmation")`
-    }
-  };
-
-  const labelsToExclude = Object.keys(budgetProviders)
-    .flatMap(provider => Object.values(budgetProviders[provider].labels))
-    .map(label => `-label:${label.getName().replace(' ', '-').replace('/', '-')}`)
-    .reduce((res, cur) => res.includes(cur) ? res : [...res, cur], [])
-    .join(' ');
-
-  Object.keys(labelerConfig)
-    .forEach(config => 
-      GmailApp
-        .search(`${labelsToExclude} from:( ${labelerConfig[config].emailList} ) ${labelerConfig[config].searchString}`)
-        .forEach(thread => {
-          Logger.log(`About to add label to thread: ${thread.getMessages()[0].getSubject()}`);
-          thread.addLabel(labelerConfig[config].labelToAdd);
-        })
-    );
-}
-
-/**
- * Updates Amazon transaction comments to convert order numbers to links
- */
-function updateAmazonTransactionComments() {
-  const since = getDateString(-5, "PST", "YYYY-MM-dd");
-
-  const accounts = ['chase_amazon', 'amazon_gc']
-    .map(accountName => getProviderConfigs(accountName));
-
-  // iterate over all enabled providers
-  const providers = Object.values(budgetProviders)
-    // filter out those providers that are disabled and does not have 'getTransactions' method
-    .filter(provider => provider.enabled 
-                        && provider.api.hasOwnProperty('getTransactions')
-                        && provider.api.hasOwnProperty('updateTransactions')
-                        && provider.api.hasOwnProperty('updateTransactionMemoForAmazon')
-    )
-    .map(provider => ({ provider, transactions: accounts.map(account => account[provider.name].account)
-      .flatMap(accountId => provider.api.getTransactions({ since, accountId }))
-    }))
-    .map(results => {
-      // filter out transactions
-      const transactions = results.transactions
-        .map(transaction => results.provider.api.updateTransactionMemoForAmazon(transaction, /^\s*(\d{3,7}-?){3}/))
-        .filter(transaction => !IsNullOrUndefined(transaction))
-
-      // if there are no transactions to update, exit out
-      if (transactions.length === 0) return true;
-
-      Logger.log(`About to update ${transactions.length} transactions for ${results.provider.name}`);
-      const responses = results.provider.api.updateTransactions(transactions);
-      const rv = responses
-        .map(response => Math.round(response.getResponseCode() / 100) === 2)
-        .reduce((res, cur) => res && cur, true);
-      if (!rv) {
-        Logger.log(`Failed to update transaction(s)`);
-      }
-    });
-}
-
-function budgetAutomation() {
-  // get all pending labels
-  const pendingLabels = Object.keys(budgetProviders)
-    .filter(provider => budgetProviders[provider].enabled)
-    .flatMap(provider => Object.keys(budgetProviders[provider].labels)
-      .filter(label => label.toLowerCase().indexOf('pending') >= 0)
-      .map(label => ({ [label]: budgetProviders[provider].labels[label]}))
-    )
-    .reduce((res, cur) => ({ ...res, ...cur }));
-
-  // make sure that there are some 'pending' labels
-  if (Object.keys(pendingLabels).length === 0) {
-    Logger.log('Could not find any pending labels. Aborting.');
-    return;
-  }
-
-  const pendingThreads = Object.keys(pendingLabels)
-    .map(label => ({label, threads: pendingLabels[label].getThreads()}))
-    .map(({label, threads}) => threads.map(thread => ({
-      email: thread,
-      type: label === 'pending' ? emailType.CREDIT_CARD : emailType.ORDER,
-      labelToRemove: pendingLabels[label]
-    })))
-    .reduce((res, cur) => [...res, ...cur], []);
-
-  pendingThreads.forEach(({email, type, labelToRemove}) => {
-    const messageFieldArr = email.getMessages()
-      .flatMap(message => extractFieldsFromMessage(message, type))
-      .filter(f => f && !IsNullOrUndefined(f.amount));
-
-
-    // process all providers
-    const result = Object.keys(budgetProviders)
-      .map(provider => processEmail(email, messageFieldArr, budgetProviders[provider], type))
-      .reduce((res, cur) => res && cur, true);
-    if (result) {
-      email
-        .removeLabel(labelToRemove)
-        .moveToArchive();
-    }
-  });
 }
 
 /**
