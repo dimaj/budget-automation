@@ -9,6 +9,15 @@ function getPropertyValue(propName) {
   return userProperties.getProperty(propName);
 }
 
+
+function updatePropertyValue(propName, value) {
+  if (value === null) {
+    return userProperties.deleteProperty(propName);
+  } else {
+    return userProperties.setProperty(propName, value);
+  }
+}
+
 // Function to find objects in an array of objects by key value
 function findObjectByKey(array, key, value) {
   for (var i = 0; i < array.length; i++) {

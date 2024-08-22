@@ -233,40 +233,137 @@ const ynabProcessor = {
     });
   },
 
-  automaticSavingsPlan: () => {
+  automaticSavingsPlan_category: ({ date, transactionsToExclude, categories }) => {
     const budgetId = ynabProcessor.getBudgetId();
-    // get all categories that are not hidden
-    const categories = JSON.parse(ynabProcessor.getCategories(budgetId).getContentText())
-      .data.category_groups
-      .reduce((cats, cur) => [...cats, ...cur.categories.filter(cat => !cat.hidden)], []);
-    // find categories that have notes with '#asp' defined
     const savingsTarget = categories.filter(cat => cat.note && cat.note.toLowerCase().indexOf('#asp') >= 0);
     
     // exit out if no category is ussed for AutomaticSavingsPlan
     if (savingsTarget.length == 0) return;
 
-    const date = getDateString(0, 'PST', 'YYYY-MM-dd');
     const currentMonth = ynabProcessor.getMonths();
     const readyToAssign = currentMonth.data.month.to_be_budgeted;
     
     const transactions = ynabProcessor.getTransactions({since: date});
-    savingsTarget.forEach(({id, note, name}) => {
-      const match = Array.from(note.matchAll(/#asp\s*:? (\d+)% "?([^"]+)"?/ig));
-      const amountToSave = match.reduce((res, [full, percentage, payee]) => {
-        const amount = transactions
-          .filter(transaction => transaction.payee_name === payee && transaction.matched_transaction_id)
-          .reduce((res, transaction) => res + transaction.amount, 0);
-        const amountToSave = amount * percentage / 100;
-        return res + amountToSave;
+    const processedTransactions = [];
+    let matchedTransactionCount = 0;
+    const updates = savingsTarget.map(({id, note, name}) => {
+      const match = Array.from(note.matchAll(/#asp\s* (\$?\d+%?) "?([^"]+)"?/ig));
+
+      const amountToSave = match.reduce((res, [full, savingsAmount, payee]) => {
+        const incomeTransactions = transactions
+          .filter(transaction => transaction.payee_name === payee
+                                 && transaction.amount > 0
+          );
+          matchedTransactionCount += incomeTransactions.length;
+        const filteredTransactions = incomeTransactions
+          .filter(transaction => !transactionsToExclude.includes(transaction.id))
+          .map(({ id, amount }) => {
+              const amountToAdd = savingsAmount.indexOf('$') >= 0
+                ? parseFloat(savingsAmount.replace('$', ''))
+                : savingsAmount.indexOf('%') >= 0
+                  ? amount * parseFloat(savingsAmount.replace('%', '')) / 100
+                  : null;
+              if (amountToAdd === null) {
+                Logger.log(`Invalid note '${full}'`);
+                return { id, amount, amountToAdd: 0 };
+              }
+              return { id, amount, amountToAdd };
+          });
+          processedTransactions.push(...filteredTransactions.map(transaction => transaction.id));
+          return res + filteredTransactions.reduce((acc, cur) => acc + cur.amountToAdd, 0);
       }, 0);
-      
-      if (readyToAssign <= amountToSave) {
-        Logger.log('Not enough funds for AutomaticSavingsPlan');
-        return;
-      }
-      Logger.log(`Adding ${amountToSave / 1000} to '${name}'`)
-      const payload = {budgetId, categoryId: id, budgeted: Math.round(amountToSave)};
-      ynabProcessor.updateCategoryBalance(payload);
-    });
+
+      return amountToSave <= 0 ? undefined : { budgetId, categoryId: id, budgeted: Math.round(amountToSave) };
+    })
+    .filter(update => update);
+    
+    const totalSavings = updates.reduce((acc, cur) => acc + cur.budgeted, 0);
+    if (readyToAssign <= totalSavings) {
+      Logger.log(`Not enough funds for AutomaticSavingsPlan. Available $${readyToAssign / 1000}; Identified for savings: $${totalSavings / 1000}`);
+      return { matchedTransactionCount, transactionIds: [], updates };
+    }
+    if (totalSavings === 0) {
+      Logger.log(`Income savings: No matching transactions found`);
+      return { matchedTransactionCount, transactionIds: [], updates };
+    }
+    return { matchedTransactionCount, transactionIds: [...new Set(processedTransactions)], updates };
+  },
+  automaticSavingsPlan_account: ({ date, transactionsToExclude, categories }) => {
+    const budgetId = ynabProcessor.getBudgetId();
+    let matchedTransactionCount = 0;
+    const processedTransactions = [];
+
+    // get all categories that are not hidden
+    const updates = ynabProcessor.getAccounts()
+      .filter(account => account.note && account.note.toLowerCase().indexOf('#asp') >= 0)
+      .map(account => {
+        const match = account.note.match(/#asp roundup "(.+)"/i);
+        if (!match) return { matchedTransactionCount, transactionIds: [] };
+        const destination = categories
+          .find(category => category.name === match[1]);
+
+        if (!destination) return { matchedTransactionCount, transactionIds: [] };;
+
+        const expenseTransactions = ynabProcessor.getTransactions({ accountId: account.id, since: date })
+          .filter(transaction => transaction.amount < 0);
+        matchedTransactionCount += expenseTransactions.length;
+
+        const transactions = expenseTransactions
+          .filter(transaction => !transactionsToExclude.includes(transaction.id))
+          .map(transaction => ({ id: transaction.id, amount: transaction.amount >= 0 ? 0 : 1000 - Math.abs(transaction.amount) % 1000 }))
+          .filter(transaction => transaction.amount % 100 !== 0);
+
+        const amount = transactions.reduce((res, cur) => res + cur.amount, 0);
+        const payload = { budgetId, categoryId: destination.id, budgeted: Math.round(amount) };
+
+        processedTransactions.push(...transactions.map(transaction => transaction.id));
+        return payload;
+      });
+    
+    const totalSavings = updates.reduce((acc, cur) => acc + cur.budgeted, 0);
+    if (totalSavings === 0) {
+      Logger.log(`Round Ups: No matching transactions found`);
+      return { matchedTransactionCount, transactionIds: [], updates };
+    }
+  
+    return { matchedTransactionCount, transactionIds: [...new Set(processedTransactions)], updates };
+  },
+  automaticSavingsPlan: () => {
+    const date = getDateString(0, 'PST', 'YYYY-MM-dd');
+    const transactionsToExclude = JSON.parse(getPropertyValue('ynabASPProcessed')) || [];
+    const budgetId = ynabProcessor.getBudgetId();
+    const categories = JSON.parse(ynabProcessor.getCategories(budgetId).getContentText())
+      .data.category_groups
+      .reduce((cats, cur) => [...cats, ...cur.categories.filter(cat => !cat.hidden)], []);
+
+
+    const incomeTransactions = ynabProcessor.automaticSavingsPlan_category({ date, transactionsToExclude, categories });
+    const expenseTransactions = ynabProcessor.automaticSavingsPlan_account({ date, transactionsToExclude, categories });
+    let newTransactionsToExclude = null;
+    if (incomeTransactions.matchedTransactionCount + expenseTransactions.matchedTransactionCount > 0) {
+      newTransactionsToExclude = [
+        ...transactionsToExclude,
+        ...new Set(incomeTransactions.transactionIds),
+        ...new Set(expenseTransactions.transactionIds)
+      ];
+    }
+    updatePropertyValue('ynabASPProcessed', JSON.stringify(newTransactionsToExclude));
+    const results = [];
+    [...incomeTransactions.updates, ...expenseTransactions.updates]
+      .filter(update => update.budgeted > 0)
+      .forEach(update => {
+        const category = categories.find(category => category.id === update.categoryId);
+        const resultsCategory = results.find(result => result.data.category.id === update.categoryId);
+        const curBudgeted = resultsCategory
+          ? resultsCategory.data.category.budgeted
+          : category
+            ? category.budgeted
+            : null;
+        if (curBudgeted !== null) {
+          Logger.log(`Adding a '$${update.budgeted / 1000}' to '${category.name}`);
+          update.budgeted += curBudgeted;
+        }
+        results.push(JSON.parse(ynabProcessor.updateCategoryBalance(update)));
+      })
   }
 };

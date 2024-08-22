@@ -41,7 +41,7 @@ const financeProviders = {
     getStockPrice: symbol => {
       const endpoint = `${financeProviders.yahoo.endpoint}/${symbol}`;
       const results = JSON.parse(UrlFetchApp.fetch(endpoint));
-      return results.chart.result[0].meta.chartPreviousClose;
+      return results.chart.result[0].meta.regularMarketPrice;
     }
   }
 };
@@ -85,20 +85,20 @@ const stocksProcessor = {
     const account = provider.api.getAccount(accName);
     let securities = {};
     if (account.note && account.note.indexOf('INVESTMENTS') >= 0) {
-      Logger.log(`Found notes with content: ${account.note}`);
       account.note
         .replace(/INVESTMENTS:\s*/, '')
         .split(/,\s*/)
         .forEach(holding => {
           const [ticker, amount] = holding.replace(':', ' ').split(/\s+/);
+          const normalizedTicker = ticker.toUpperCase();
           if (!ticker || !amount) { 
-            console.warn(`Either stock symbol or amount is missing. symbol=${ticker} amount=${amount}`);
+            console.warn(`Either stock symbol or amount is missing. symbol=${normalizedTicker} amount=${amount}`);
           }
           else {
-            if(!Object.keys(securities).includes(ticker)) {
-              securities[ticker] = 0;
+            if(!Object.keys(securities).includes(normalizedTicker)) {
+              securities[normalizedTicker] = 0;
             }
-            securities[ticker] += parseFloat(amount.replace(',', ''));
+            securities[normalizedTicker] += parseFloat(amount.replace(',', ''));
           }
         });
     } else {
@@ -109,13 +109,14 @@ const stocksProcessor = {
             : false;
           if (match) {
             const [fullMatch, action, ticker, amount] = transaction.notes.match(/(Buy|Sell)\s+(\w*)[\s:](.*)/i);
-            if (!Object.keys(securities).includes(ticker)) {
-              securities[ticker] = 0;
+            const normalizedTicker = ticker.toUpperCase();
+            if (!Object.keys(securities).includes(normalizedTicker)) {
+              securities[normalizedTicker] = 0;
             }
             if (action.toUpperCase() === 'BUY') {
-              securities[ticker] += parseFloat(amount.replace(',', ''));
+              securities[normalizedTicker] += parseFloat(amount.replace(',', ''));
             } else if (action.toUpperCase() === 'SELL') {
-              securities[ticker] -= parseAmount(amount.replace(',', ''));
+              securities[normalizedTicker] -= parseAmount(amount.replace(',', ''));
             } else {
               Logger.log(`Unknown action '${action}`);
             }
@@ -123,6 +124,10 @@ const stocksProcessor = {
         })
     }
 
+    Logger.log(`Holding the following securities:`);
+    Logger.log(securities);
+    Logger.log('Prices are:');
+    Logger.log(stocksProcessor.stocksValues);
     return Object.keys(securities)
       .reduce((res, cur) => {
         const amount = securities[cur];
