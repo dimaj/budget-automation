@@ -28,6 +28,7 @@ function getProviderConfigs(accountName) {
 const accountsMap = {
   chase: {
     match: (from, body) => {
+
       if (from.indexOf('chase') === -1) { return false }
       if (IsNullOrUndefined(body)) { return true }
 
@@ -323,20 +324,6 @@ const merchantEmailsMap = {
   }
 }
 
-/**
- * Gets reference to an email label
- * @param labelName {string} Label to get
- * @param shouldCreate {boolean} Should label be created if it doesn't exist
- * @return {GmailApp.GmailLabel} Reference to a label
- */
-function getLabelOrCreate(labelName, shouldCreate) {
-  let rv = GmailApp.getUserLabelByName(labelName);
-  if (IsNullOrUndefined(rv) && shouldCreate) {
-    rv = GmailApp.createLabel(labelName);
-  }
-
-  return rv;
-}
 
 /**
  * Processes a single email
