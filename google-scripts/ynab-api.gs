@@ -197,8 +197,8 @@ const ynabProcessor = {
     return UrlFetchApp.fetch(endpoint, options);
   },
 
-  getMonths: (date = 'current') => {
-    const budgetId = ynabProcessor.getBudgetId();
+  getMonths: ({ budgetName, date = 'current' }) => {
+    const budgetId = ynabProcessor.getBudgetId(budgetName);
     const url = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/months/${date}`;
 
     const options = {
@@ -255,7 +255,7 @@ const ynabProcessor = {
     // exit out if no category is ussed for AutomaticSavingsPlan
     if (savingsTarget.length == 0) return { matchedTransactionCount, transactionIds: [], updates: [] };
 
-    const currentMonth = ynabProcessor.getMonths();
+    const currentMonth = ynabProcessor.getMonths({ budgetName });
     const readyToAssign = currentMonth.data.month.to_be_budgeted;
     
     const processedTransactions = [];
@@ -282,9 +282,9 @@ const ynabProcessor = {
               }
               return { id, amount, amountToAdd };
           });
-          processedTransactions.push(...filteredTransactions.map(transaction => transaction.id));
-          matchedTransactionCount += filteredTransactions.length;
-          return res + filteredTransactions.reduce((acc, cur) => acc + cur.amountToAdd, 0);
+        processedTransactions.push(...filteredTransactions.map(transaction => transaction.id));
+        matchedTransactionCount += filteredTransactions.length;
+        return res + filteredTransactions.reduce((acc, cur) => acc + cur.amountToAdd, 0);
       }, 0);
 
       return amountToSave <= 0 ? undefined : { budgetId, categoryId: id, budgeted: Math.round(amountToSave) };
@@ -292,13 +292,13 @@ const ynabProcessor = {
     .filter(update => update);
     
     const totalSavings = updates.reduce((acc, cur) => acc + cur.budgeted, 0);
-    if (readyToAssign <= totalSavings) {
-      Logger.log(`Not enough funds for AutomaticSavingsPlan. Available $${readyToAssign / 1000}; Identified for savings: $${totalSavings / 1000}`);
-      return { matchedTransactionCount, transactionIds: [], updates };
-    }
     if (totalSavings === 0) {
       Logger.log(`Income savings: No matching transactions found`);
-      return { matchedTransactionCount, transactionIds: [], updates };
+      return { matchedTransactionCount, transactionIds: [], updates: [] };
+    }
+    if (readyToAssign < totalSavings) {
+      Logger.log(`Not enough funds for AutomaticSavingsPlan. Available $${readyToAssign / 1000}; Identified for savings: $${totalSavings / 1000}`);
+      return { matchedTransactionCount, transactionIds: [], updates: [] };
     }
     return { matchedTransactionCount, transactionIds: [...new Set(processedTransactions)], updates };
   },

@@ -1,14 +1,4 @@
 const amazonOrderBaseUrl='https://www.amazon.com/gp/your-account/order-details?ie=UTF8&orderID=';
-// const globalLabels = {
-//   pending: getLabelOrCreate('Budget Automation/budget-to-process', false),
-//   ordersPending: getLabelOrCreate('Budget Automation/transactions-to-process', false)
-// };
-
-
-// TODO: remove after optimizing email labling code
-const ynabAccountProperty = JSON.parse(getPropertyValue('ynabEmailAutomationAccounts') || '{}');
-const fireflyAccountProperty = JSON.parse(getPropertyValue('fireflyEmailAutomationAccounts') || '{}');
-const actualAccountProperty = JSON.parse(getPropertyValue('actualEmailAutomationAccounts') || '{}');
 
 /**
  * Email type
