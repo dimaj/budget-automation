@@ -43,11 +43,6 @@ const ynabProcessor = {
 
   getAccount: accountName => {
     return ynabProcessor.getAccounts()
-    // const budgetId = ynabProcessor.getBudgetId(getPropertyValue('ynabBudgetName'));
-    // const url = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/accounts`;
-    // return JSON.parse(UrlFetchApp.fetch(url, ynabProcessor.fetchOptions))
-    //   .data
-    //   .accounts
       .find(account => account.name === accountName);
   },
 
