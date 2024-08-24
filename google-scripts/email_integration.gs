@@ -1,4 +1,14 @@
 const amazonOrderBaseUrl='https://www.amazon.com/gp/your-account/order-details?ie=UTF8&orderID=';
+// const globalLabels = {
+//   pending: getLabelOrCreate('Budget Automation/budget-to-process', false),
+//   ordersPending: getLabelOrCreate('Budget Automation/transactions-to-process', false)
+// };
+
+
+// TODO: remove after optimizing email labling code
+const ynabAccountProperty = JSON.parse(getPropertyValue('ynabEmailAutomationAccounts') || '{}');
+const fireflyAccountProperty = JSON.parse(getPropertyValue('fireflyEmailAutomationAccounts') || '{}');
+const actualAccountProperty = JSON.parse(getPropertyValue('actualEmailAutomationAccounts') || '{}');
 
 /**
  * Email type
@@ -28,6 +38,7 @@ function getProviderConfigs(accountName) {
 const accountsMap = {
   chase: {
     match: (from, body) => {
+
       if (from.indexOf('chase') === -1) { return false }
       if (IsNullOrUndefined(body)) { return true }
 
@@ -323,20 +334,6 @@ const merchantEmailsMap = {
   }
 }
 
-/**
- * Gets reference to an email label
- * @param labelName {string} Label to get
- * @param shouldCreate {boolean} Should label be created if it doesn't exist
- * @return {GmailApp.GmailLabel} Reference to a label
- */
-function getLabelOrCreate(labelName, shouldCreate) {
-  let rv = GmailApp.getUserLabelByName(labelName);
-  if (IsNullOrUndefined(rv) && shouldCreate) {
-    rv = GmailApp.createLabel(labelName);
-  }
-
-  return rv;
-}
 
 /**
  * Processes a single email

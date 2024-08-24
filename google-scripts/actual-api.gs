@@ -7,7 +7,8 @@ const actualProcessor = {
       'Content-Type': 'application/json',
       accept: 'application/json'
     },
-    method: 'GET'
+    method: 'GET',
+    muteHttpExceptions: true
   },
   /**
    * Adds transaction to register
@@ -19,7 +20,7 @@ const actualProcessor = {
     amount, 
     payeeName, 
     cleared = false, 
-    notes = 'Entered automatically by Google Apps Script automation #to-process',
+    notes = '#to-process Entered automatically by Google Apps Script automation',
     } = transaction
   ) => {
     const payload = {
@@ -98,7 +99,7 @@ const actualProcessor = {
   },
 
   updateTransactionMemoForAmazon: (transaction, regex) => {
-    if (IsNullOrUndefined(transaction.notes)) {
+    if (IsNullOrUndefined(transaction) || IsNullOrUndefined(transaction.notes)) {
       return null;
     }
     
@@ -109,7 +110,7 @@ const actualProcessor = {
 
     return {
       ...transaction,
-      notes: transaction.notes.replace(amazonTransactionId[0], `[${amazonTransactionId[0]}](${amazonOrderBaseUrl}${amazonTransactionId[0]})`)
+      notes: transaction.notes.trim().replace(amazonTransactionId[0], `[${amazonTransactionId[0]}](${amazonOrderBaseUrl}${amazonTransactionId[0]})`)
     };
   },
 

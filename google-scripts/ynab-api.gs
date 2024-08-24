@@ -8,10 +8,14 @@ const ynabProcessor = {
     method: 'GET'
   },
 
-  budgetName: getPropertyValue('ynabBudgetName'),
+  defaultBudgetName: getPropertyValue('ynabBudgetName'),
   budgetIds: {},
 
   getBudget: budgetName => {
+    if (!budgetName) {
+      budgetName = ynabProcessor.defaultBudgetName;
+    }
+
     return JSON.parse(UrlFetchApp.fetch(`${ynabProcessor.baseEndpoint}/budgets`, ynabProcessor.fetchOptions))
       .data
       .budgets
@@ -19,10 +23,6 @@ const ynabProcessor = {
   },
 
   getBudgetId: budgetName => {
-    if (!budgetName) {
-      budgetName = ynabProcessor.budgetName;
-    }
-
     if (ynabProcessor.budgetIds[budgetName]) {
       return ynabProcessor.budgetIds[budgetName];
     }
@@ -33,12 +33,21 @@ const ynabProcessor = {
     return budgetId;
   },
 
-  getAccount: accountName => {
-    const budgetId = ynabProcessor.getBudgetId();
+  getAccounts: budgetName => {
+    const budgetId = ynabProcessor.getBudgetId(budgetName);
     const url = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/accounts`;
     return JSON.parse(UrlFetchApp.fetch(url, ynabProcessor.fetchOptions))
       .data
-      .accounts
+      .accounts;
+  },
+
+  getAccount: accountName => {
+    return ynabProcessor.getAccounts()
+    // const budgetId = ynabProcessor.getBudgetId(getPropertyValue('ynabBudgetName'));
+    // const url = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/accounts`;
+    // return JSON.parse(UrlFetchApp.fetch(url, ynabProcessor.fetchOptions))
+    //   .data
+    //   .accounts
       .find(account => account.name === accountName);
   },
 
@@ -63,8 +72,8 @@ const ynabProcessor = {
    * @param {string=} since Date in a form of 'YYYY-MM-dd'
    * @returns {!Array<BudgetAutomation.YNABTransaction>}
    */
-  getTransactions: ({ accountId, categoryId, since }) => {
-    const budgetId = ynabProcessor.getBudgetId();
+  getTransactions: ({ budgetName, accountId, categoryId, since }) => {
+    const budgetId = ynabProcessor.getBudgetId(budgetName);
     const sinceDate = IsNullOrUndefined(since) ? '' : `?since_date=${since}`;
     const account = IsNullOrUndefined(accountId) ? '' : `accounts/${accountId}/`
     const category = IsNullOrUndefined(categoryId) && account === '' ? '' : `categories/${categoryId}/`;
@@ -76,7 +85,7 @@ const ynabProcessor = {
       subpath = category;
     }
 
-    const endpoint = `${url}/budgets/${budgetId}/${subpath}transactions${sinceDate}`;
+    const endpoint = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/${subpath}transactions${sinceDate}`;
 
     const response = UrlFetchApp.fetch(endpoint, ynabProcessor.fetchOptions);
     return response.getResponseCode() / 100 === 2 ? JSON.parse(response).data.transactions : undefined;
@@ -84,17 +93,17 @@ const ynabProcessor = {
 
   /**
    * Updates transactions
-   * @param {!Array<BudgetAutomation.YNABTransaction}
    * @param {string} budgetName
+   * @param {!Array<BudgetAutomation.YNABTransaction}
    * @returns {UrlFetchApp.HTTPResponse}
    */
-  updateTransactions: (transactions, budgetName) => {
+  updateTransactions: (transactions, budgetName = getPropertyValue('ynabBudgetName')) => {
     if (IsNullOrUndefined(transactions) || transactions.length === 0) {
       Logger.log('There are no transactions to update.');
       return true;
     }
     const budgetId = ynabProcessor.getBudgetId(budgetName);
-    const endpoint = `${url}/budgets/${budgetId}/transactions`;
+    const endpoint = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/transactions`;
     const options = {
       ...ynabProcessor.fetchOptions,
       method: 'PATCH',
@@ -119,7 +128,7 @@ const ynabProcessor = {
         date: Utilities.formatDate(new Date(), "PST", "yyyy-MM-dd"),
         amount: parseInt(amount * 1000),
         payee_name,
-        memo: memo || 'Entered automatically by Google Apps Script automation #to-process',
+        memo: memo || '#to-process Entered automatically by Google Apps Script automation',
         cleared,
         approved,
         category_id
@@ -151,7 +160,7 @@ const ynabProcessor = {
       approved: false,
       memo: notes || undefined,
       category,
-      cleared
+      cleared: clearedValue
     };
 
     Logger.log(`About to submit YNAB transaction for '${merchant}' in the amount of '${amount}'`);
@@ -172,20 +181,19 @@ const ynabProcessor = {
 
     return {
       ...transaction,
-      memo: transaction.memo.replace(amazonTransactionId[0], `[${amazonTransactionId[0]}](${amazonOrderBaseUrl}${amazonTransactionId[0]})`)
+      memo: transaction.memo.trim().replace(amazonTransactionId[0], `[${amazonTransactionId[0]}](${amazonOrderBaseUrl}${amazonTransactionId[0]})`)
     };
   },
 
-  updateCategoryBalance: ({ budgetId, categoryId, budgeted, month }) => {
+  updateCategoryBalance: ({ budgetId, categoryId, budgeted, date }) => {
     const payload = { category: { budgeted } };
     const options = {
       ...ynabProcessor.fetchOptions,
       method: 'PATCH',
       payload: JSON.stringify(payload)
     };
-    const monthInMillis = month && 30 * 24 * 3600 * 1000 || 0;
-    const date = monthInMillis && getDateString(monthInMillis, 'UTC', 'YYYY-MM-dd') || getDateString(0, 'UTC', 'YYYY-MM-dd');
-    const endpoint = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/months/${date}/categories/${categoryId}`
+    const dateStr = date || getDateString(0, 'UTC', 'YYYY-MM-dd');
+    const endpoint = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/months/${dateStr}/categories/${categoryId}`
     return UrlFetchApp.fetch(endpoint, options);
   },
 
@@ -210,6 +218,11 @@ const ynabProcessor = {
     // find categories that have notes with '#cleanup' defined
     const catsToClean = categories.filter(cat => cat.note && cat.note.toLowerCase().indexOf('#cleanup') >= 0);
     
+    const today = new Date();
+    today.setMonth(today.getMonth() - 1);
+    today.setDate(1);
+    const date = Utilities.formatDate(today, 'UTC', 'YYYY-MM-dd');
+    
     catsToClean.forEach(({balance: amount, id: categoryId, note, name}) => {
       if (amount <= 0) return;
 
@@ -220,7 +233,8 @@ const ynabProcessor = {
         ynabProcessor.updateCategoryBalance({
           budgetId,
           categoryId: destinationId,
-          budgeted: amount
+          budgeted: amount,
+          date
         });
       } else {
         Logger.log(`Moving $${amount / 1000} from '${name}' to 'Ready to assign'`);
@@ -233,19 +247,19 @@ const ynabProcessor = {
     });
   },
 
-  automaticSavingsPlan_category: ({ date, transactionsToExclude, categories }) => {
-    const budgetId = ynabProcessor.getBudgetId();
+  automaticSavingsPlan_category: ({ budgetName, date, transactionsToExclude, categories }) => {
+    const budgetId = ynabProcessor.getBudgetId(budgetName);
     const savingsTarget = categories.filter(cat => cat.note && cat.note.toLowerCase().indexOf('#asp') >= 0);
+    let matchedTransactionCount = 0;
     
     // exit out if no category is ussed for AutomaticSavingsPlan
-    if (savingsTarget.length == 0) return;
+    if (savingsTarget.length == 0) return { matchedTransactionCount, transactionIds: [], updates: [] };
 
     const currentMonth = ynabProcessor.getMonths();
     const readyToAssign = currentMonth.data.month.to_be_budgeted;
     
-    const transactions = ynabProcessor.getTransactions({since: date});
     const processedTransactions = [];
-    let matchedTransactionCount = 0;
+    const transactions = ynabProcessor.getTransactions({budgetName, since: date});
     const updates = savingsTarget.map(({id, note, name}) => {
       const match = Array.from(note.matchAll(/#asp\s* (\$?\d+%?) "?([^"]+)"?/ig));
 
@@ -254,7 +268,6 @@ const ynabProcessor = {
           .filter(transaction => transaction.payee_name === payee
                                  && transaction.amount > 0
           );
-          matchedTransactionCount += incomeTransactions.length;
         const filteredTransactions = incomeTransactions
           .filter(transaction => !transactionsToExclude.includes(transaction.id))
           .map(({ id, amount }) => {
@@ -270,6 +283,7 @@ const ynabProcessor = {
               return { id, amount, amountToAdd };
           });
           processedTransactions.push(...filteredTransactions.map(transaction => transaction.id));
+          matchedTransactionCount += filteredTransactions.length;
           return res + filteredTransactions.reduce((acc, cur) => acc + cur.amountToAdd, 0);
       }, 0);
 
@@ -288,13 +302,13 @@ const ynabProcessor = {
     }
     return { matchedTransactionCount, transactionIds: [...new Set(processedTransactions)], updates };
   },
-  automaticSavingsPlan_account: ({ date, transactionsToExclude, categories }) => {
-    const budgetId = ynabProcessor.getBudgetId();
+  automaticSavingsPlan_account: ({ budgetName, date, transactionsToExclude, categories }) => {
+    const budgetId = ynabProcessor.getBudgetId(budgetName);
     let matchedTransactionCount = 0;
     const processedTransactions = [];
 
     // get all categories that are not hidden
-    const updates = ynabProcessor.getAccounts()
+    const updates = ynabProcessor.getAccounts(budgetName)
       .filter(account => account.note && account.note.toLowerCase().indexOf('#asp') >= 0)
       .map(account => {
         const match = account.note.match(/#asp roundup "(.+)"/i);
@@ -304,14 +318,14 @@ const ynabProcessor = {
 
         if (!destination) return { matchedTransactionCount, transactionIds: [] };;
 
-        const expenseTransactions = ynabProcessor.getTransactions({ accountId: account.id, since: date })
-          .filter(transaction => transaction.amount < 0);
-        matchedTransactionCount += expenseTransactions.length;
+        const expenseTransactions = ynabProcessor.getTransactions({ budgetName, accountId: account.id, since: date })
+          .filter(transaction => transaction.amount < 0 && transaction.transfer_account_id === null);
 
         const transactions = expenseTransactions
           .filter(transaction => !transactionsToExclude.includes(transaction.id))
           .map(transaction => ({ id: transaction.id, amount: transaction.amount >= 0 ? 0 : 1000 - Math.abs(transaction.amount) % 1000 }))
           .filter(transaction => transaction.amount % 100 !== 0);
+        matchedTransactionCount += transactions.length;
 
         const amount = transactions.reduce((res, cur) => res + cur.amount, 0);
         const payload = { budgetId, categoryId: destination.id, budgeted: Math.round(amount) };
@@ -328,17 +342,17 @@ const ynabProcessor = {
   
     return { matchedTransactionCount, transactionIds: [...new Set(processedTransactions)], updates };
   },
-  automaticSavingsPlan: () => {
+  automaticSavingsPlan: ({ budgetName } = {}) => {
     const date = getDateString(0, 'PST', 'YYYY-MM-dd');
     const transactionsToExclude = JSON.parse(getPropertyValue('ynabASPProcessed')) || [];
-    const budgetId = ynabProcessor.getBudgetId();
+    const budgetId = ynabProcessor.getBudgetId(budgetName);
     const categories = JSON.parse(ynabProcessor.getCategories(budgetId).getContentText())
       .data.category_groups
       .reduce((cats, cur) => [...cats, ...cur.categories.filter(cat => !cat.hidden)], []);
 
 
-    const incomeTransactions = ynabProcessor.automaticSavingsPlan_category({ date, transactionsToExclude, categories });
-    const expenseTransactions = ynabProcessor.automaticSavingsPlan_account({ date, transactionsToExclude, categories });
+    const incomeTransactions = ynabProcessor.automaticSavingsPlan_category({ budgetName, date, transactionsToExclude, categories });
+    const expenseTransactions = ynabProcessor.automaticSavingsPlan_account({ budgetName, date, transactionsToExclude, categories });
     let newTransactionsToExclude = null;
     if (incomeTransactions.matchedTransactionCount + expenseTransactions.matchedTransactionCount > 0) {
       newTransactionsToExclude = [

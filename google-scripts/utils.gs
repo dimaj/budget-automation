@@ -9,7 +9,6 @@ function getPropertyValue(propName) {
   return userProperties.getProperty(propName);
 }
 
-
 function updatePropertyValue(propName, value) {
   if (value === null) {
     return userProperties.deleteProperty(propName);
@@ -84,3 +83,19 @@ function parseAmount(amountStr) {
 function IsNullOrUndefined(value) {
   return value === undefined || value === null;
 }
+
+/**
+ * Gets reference to an email label
+ * @param labelName {string} Label to get
+ * @param shouldCreate {boolean} Should label be created if it doesn't exist
+ * @return {GmailApp.GmailLabel} Reference to a label
+ */
+function getLabelOrCreate(labelName, shouldCreate) {
+  let rv = GmailApp.getUserLabelByName(labelName);
+  if (IsNullOrUndefined(rv) && shouldCreate) {
+    rv = GmailApp.createLabel(labelName);
+  }
+
+  return rv;
+}
+
