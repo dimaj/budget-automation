@@ -48,15 +48,22 @@ const ynabProcessor = {
 
   getAccountValue: accountName => ynabProcessor.getAccount(accountName).balance / 1000,
 
-  getCategory: (budgetId, categoryName) => {
-    const categories = JSON.parse(ynabProcessor.getCategories(budgetId));
-    return categories.data.category_groups
-      .flatMap(category_group => category_group.categories)
-      .find(category_group => category_group.name === categoryName);
+  getCategory: (budgetId, categoryName, date) => {
+    const categories = JSON.parse(ynabProcessor.getCategories(budgetId, date));
+    return date 
+      ? categories
+      : categories.data.category_groups
+        .flatMap(category_group => category_group.categories)
+        .find(category_group => category_group.name === categoryName);
   },
 
   getCategories: budgetId => {
     const endpoint = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/categories`;
+    return UrlFetchApp.fetch(endpoint, ynabProcessor.fetchOptions);
+  },
+
+  getCategory: (budgetId, categoryId, date) => {
+    const endpoint = `${ynabProcessor.baseEndpoint}/budgets/${budgetId}/months/${date}/categories/${categoryId}`;
     return UrlFetchApp.fetch(endpoint, ynabProcessor.fetchOptions);
   },
 
@@ -205,6 +212,13 @@ const ynabProcessor = {
   },
 
   cleanup: budgetName => {
+    const today = new Date();
+    const numDays = getNumDays(today.getFullYear(), today.getMonth());
+    // set date to last day of last month
+    today.setMonth(today.getMonth() - 1);
+    today.setDate(numDays - 1);
+    const date = Utilities.formatDate(today, 'UTC', 'YYYY-MM-dd');
+    
     const budgetId = ynabProcessor.getBudgetId(budgetName);
     // get all categories that are not hidden
     const categories = JSON.parse(ynabProcessor.getCategories(budgetId).getContentText())
@@ -213,22 +227,19 @@ const ynabProcessor = {
     // find categories that have notes with '#cleanup' defined
     const catsToClean = categories.filter(cat => cat.note && cat.note.toLowerCase().indexOf('#cleanup') >= 0);
     
-    const today = new Date();
-    today.setMonth(today.getMonth() - 1);
-    today.setDate(1);
-    const date = Utilities.formatDate(today, 'UTC', 'YYYY-MM-dd');
-    
-    catsToClean.forEach(({balance: amount, id: categoryId, note, name}) => {
+    catsToClean.forEach(({ id: categoryId, note, name }) => {
+      const { budgeted, balance: amount } = JSON.parse(ynabProcessor.getCategory(budgetId, categoryId, date)).data.category;
       if (amount <= 0) return;
 
       if(match = note.match(/#cleanup "?(.+?)"?$/)) {
-        Logger.log(match);
-        const {id: destinationId } = categories.find(cat => cat.name === match[1]);
+        const destinationId = categories.find(cat => cat.name === match[1]).id;
+        const destinationAmount = JSON.parse(ynabProcessor.getCategory(budgetId, destinationId, date))
+          .data.category.budgeted;
         Logger.log(`Moving $${amount / 1000} from '${name}' to '${match[1]}'`);
         ynabProcessor.updateCategoryBalance({
           budgetId,
           categoryId: destinationId,
-          budgeted: amount,
+          budgeted: destinationAmount + amount,
           date
         });
       } else {
@@ -237,7 +248,8 @@ const ynabProcessor = {
       ynabProcessor.updateCategoryBalance({
         budgetId,
         categoryId,
-        budgeted: amount * -1
+        budgeted: budgeted - amount,
+        date
       });
     });
   },
@@ -291,10 +303,10 @@ const ynabProcessor = {
       Logger.log(`Income savings: No matching transactions found`);
       return { matchedTransactionCount, transactionIds: [], updates: [] };
     }
-    if (readyToAssign < totalSavings) {
-      Logger.log(`Not enough funds for AutomaticSavingsPlan. Available $${readyToAssign / 1000}; Identified for savings: $${totalSavings / 1000}`);
-      return { matchedTransactionCount, transactionIds: [], updates: [] };
-    }
+    // if (readyToAssign < totalSavings) {
+    //   Logger.log(`Not enough funds for AutomaticSavingsPlan. Available $${readyToAssign / 1000}; Identified for savings: $${totalSavings / 1000}`);
+    //   return { matchedTransactionCount, transactionIds: [], updates: [] };
+    // }
     return { matchedTransactionCount, transactionIds: [...new Set(processedTransactions)], updates };
   },
   automaticSavingsPlan_account: ({ budgetName, date, transactionsToExclude, categories }) => {

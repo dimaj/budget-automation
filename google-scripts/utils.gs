@@ -99,3 +99,13 @@ function getLabelOrCreate(labelName, shouldCreate) {
   return rv;
 }
 
+/**
+ * Get number of days in current month
+ * @param year {number} Year of the date
+ * @parem month {number} Month of the date (0-based)
+ * @returns {number} Number of days this month (0-based)
+ * @example `getNumDays(2024, 9); // returns 30`
+ */
+function getNumDays(year, month) {
+  return new Date(year, month, 0).getDate();
+}
