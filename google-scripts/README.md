@@ -31,7 +31,7 @@ By default, [ActualBudget](actualbudget.org) does not have RESTful API. In order
 | Property Name | Description |
 |---------------|-------------|
 | actualApiEndpoint | URL for your instance of ActualBudget HTTP Server |
-| actualApiKey | API token for HTTP Server |
+| actualApiKey | API token for [actual-http-api](https://github.com/jhonderson/actual-http-api) Server |
 | actualBudgetId | Budget Sync ID for budget file |
 | actualEmailAutomationAccounts | A JSON object that defines account infomration. |
 
