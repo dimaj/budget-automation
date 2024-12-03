@@ -6,6 +6,9 @@
  * @property {function(string)} getStockPrice Gets a value of a ticker
  */
 const financeProviders = {
+  globalFetchOptions: {
+    muteHttpExceptions: true
+  },
   alphavantage: {
     endpoint: 'https://www.alphavantage.co',
     apiKey: getPropertyValue('alphavantage_apikey'),
@@ -39,14 +42,19 @@ const financeProviders = {
   yahoo: {
     endpoint: 'https://query2.finance.yahoo.com/v8/finance/chart',
     getStockPrice: symbol => {
-      const endpoint = `${financeProviders.yahoo.endpoint}/${symbol}`;
-      const results = JSON.parse(UrlFetchApp.fetch(endpoint));
-      return results.chart.result[0].meta.regularMarketPrice;
+      const endpoint = `${financeProviders.yahoo.endpoint}/${symbol.trim()}`;
+      try {
+        const results = JSON.parse(UrlFetchApp.fetch(endpoint, financeProviders.globalFetchOptions));
+        return results.chart.result[0].meta.regularMarketPrice;
+      } catch (e) {
+        Logger.log(`Failed to get stocks from '${endpoint}' due to: ${e}`);
+      }
     }
   }
 };
 
 const stocksProcessor = {
+  // provider: financeProviders.alphavantage,
   provider: financeProviders.yahoo,
 
   stocksValues: {
@@ -81,8 +89,7 @@ const stocksProcessor = {
    * @return {number} Portfolio value
    */
   getPortfolioValue: (provider, accountName) => {
-    const accName = provider.account(accountName).name;
-    const account = provider.api.getAccount(accName);
+    const account = provider.api.getAccount(accountName);
     let securities = {};
     if (account.note && account.note.indexOf('INVESTMENTS') >= 0) {
       account.note
@@ -132,8 +139,25 @@ const stocksProcessor = {
       .reduce((res, cur) => {
         const amount = securities[cur];
         const results = stocksProcessor.fetchStockPrice(cur);
+        Utilities.sleep(500);
 
         return res + results * amount;
       }, 0);
+  },
+
+  /**
+   * Get names of accounts that need to be updated
+   * These accounts are identified by having a note that containst `INVESTMENTS:` string
+   * @param {BudgetAutomation.Provider} provider Provider configuration
+   * @return {Array} Account names
+   */
+  getInvestmentAccounts: (provider) => {
+    if (!Object.keys(provider.api).includes('getAccounts')) {
+      Logger.log(`Provider '${provider.name}' does not implement 'getAccounts' method. Defaulting to 'investments'.`);
+      return [provider.account('investments')];
+    }
+    const accounts = provider.api.getAccounts()
+      .filter(account => account.note && account.note.indexOf('INVESTMENTS:') >= 0);
+    return accounts;
   }
 };
